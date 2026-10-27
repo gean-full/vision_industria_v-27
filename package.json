@@ -1,0 +1,13 @@
+{
+  "name": "visioindustria",
+  "version": "0.3.0",
+  "private": true,
+  "description": "VisioIndústria: protótipo de alertas falados de obstáculos com câmera, no navegador (TensorFlow.js + COCO-SSD).",
+  "license": "UNLICENSED",
+  "engines": {"node": ">=21"},
+  "scripts": {
+    "test": "node --test testes/*.test.js",
+    "check": "node --check js/nucleo.js && node --check js/app.js && node --check js/pwa.js && node --check sw.js",
+    "serve": "python3 -m http.server 8080"
+  }
+}

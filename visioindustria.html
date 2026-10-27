@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Origens permitidas: os scripts do app (mesma origem), as bibliotecas fixadas no jsDelivr e os pesos do modelo no Google Cloud Storage (baixados pelo COCO-SSD).
+     'unsafe-eval' é exigido pelo TensorFlow.js 4.22 (usa Function() internamente; sem ele a carga do modelo falha, verificado no Chromium). Scripts embutidos continuam proibidos. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' https://cdn.jsdelivr.net; connect-src 'self' https://storage.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; style-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0b5cab">
+<meta name="description" content="Protótipo experimental de alertas falados de obstáculos com a câmera do celular. Ferramenta complementar: não garante caminho livre.">
+<title>VisioIndústria — protótipo</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icones/icone.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icones/icone-192.png">
+<link rel="stylesheet" href="css/visioindustria.css">
+</head>
+<body>
+<a class="pular" href="#controles">Ir para os controles</a>
+<main>
+  <header>
+    <h1>VisioIndústria</h1>
+    <p class="sub">Protótipo experimental: câmera, detecção de objetos e alertas de áudio em português. A análise roda no navegador.</p>
+  </header>
+
+  <div class="panel aviso" role="note">
+    <strong>Ferramenta complementar.</strong> Não confirma que o caminho está livre, não evita colisões e não substitui bengala, cão-guia, EPI ou procedimentos de segurança. Nenhuma imagem é armazenada nem enviada: o processamento é local. As bibliotecas e o modelo de detecção são baixados pela internet ao iniciar.
+  </div>
+  <div class="panel aviso erro" id="avisoRede" role="alert" hidden><strong>Sem a biblioteca de detecção.</strong> O TensorFlow.js ou o COCO-SSD não carregaram (sem internet ou rede bloqueada). A análise não funciona offline: conecte-se e recarregue a página.</div>
+
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted aria-label="Imagem da câmera"></video>
+    <canvas id="overlay" aria-hidden="true"></canvas>
+    <div class="grid-lines" aria-hidden="true"></div>
+    <div class="lados" aria-hidden="true"><span id="rotE">esquerda</span><span id="rotD">direita</span></div>
+  </div>
+
+  <section class="panel estado-painel" aria-labelledby="tituloEstado">
+    <h2 id="tituloEstado" class="vh">Estado</h2>
+    <p class="selo"><span id="estado" data-estado="ocioso">Pronta para iniciar</span></p>
+    <p id="status" role="status" aria-live="polite">Pronto para iniciar.</p>
+  </section>
+
+  <div class="bar" id="controles" role="group" aria-label="Controles da assistência">
+    <button type="button" id="btnIniciar">Iniciar assistência</button>
+    <button type="button" id="btnPausar" class="sec" disabled>Pausar</button>
+    <button type="button" id="btnEncerrar" class="sec" disabled>Encerrar</button>
+    <button type="button" id="btnTeste" class="sec">Testar áudio</button>
+  </div>
+  <p class="dica"><small>Atalhos de teclado: <kbd>Espaço</kbd> inicia, pausa ou retoma; <kbd>Esc</kbd> encerra.</small></p>
+
+  <div class="panel aviso" id="avisoPista" hidden><strong>Modo pista controlada (EXPERIMENTAL).</strong> As direções assumem que a pista de demonstração foi montada com passagem disponível. A câmera <b>não comprova</b> que o lado indicado esteja livre ou seguro: uma região sem detecção só é tratada como disponível por essa premissa. Não use fora da pista preparada.</div>
+
+  <details class="panel">
+    <summary><strong>Limites desta versão</strong> (leia antes de usar)</summary>
+    <ul>
+      <li>O modelo (COCO-SSD) reconhece só algumas classes comuns: pessoas, veículos, móveis, malas. <b>Não</b> reconhece parede, porta, palete, carrinho, degrau ou buraco.</li>
+      <li>Não mede distância: a posição é só esquerda, frente ou direita <b>na imagem</b>. Tamanho na imagem não é distância.</li>
+      <li>O app nunca afirma passagem livre. Indica no máximo <b>possível passagem</b>, quando a heurística de cor do piso (<b>experimental, sem validação em campo</b>) a confirma na região.</li>
+      <li>Segmentação semântica e profundidade <b>não existem</b> nesta versão. Larguras são relativas na imagem, não em metros.</li>
+      <li>Sem detecção não significa sem obstáculo. Dados velhos, incompletos ou com falha resultam em “Pare e aguarde”, nunca em direção.</li>
+    </ul>
+  </details>
+
+  <div class="cols">
+    <section class="panel" aria-labelledby="tituloAjustes">
+      <h2 id="tituloAjustes">Ajustes</h2>
+      <label>Confiança geral <span class="campo"><input type="range" id="conf" min="40" max="90" value="60"><output id="confV" for="conf">60%</output></span></label>
+      <label>Presença mínima (ciclos) <span class="campo"><input type="range" id="persist" min="1" max="5" value="2"><output id="persistV" for="persist">2</output></span></label>
+      <label>Intervalo de análise (ms) <span class="campo"><input type="range" id="intervalo" min="100" max="1000" step="50" value="300"><output id="intervaloV" for="intervalo">300</output></span></label>
+      <label>Pausa entre alertas iguais (s) <span class="campo"><input type="range" id="cool" min="2" max="20" value="6"><output id="coolV" for="cool">6</output></span></label>
+      <label>Modelo <select id="modelo"><option value="mobilenet_v2">Preciso (mais lento, baixa 68 MB)</option><option value="lite_mobilenet_v2">Leve (mais rápido, baixa 19 MB)</option></select></label>
+      <label>Lados (esquerda/direita) <select id="lados"><option value="auto">Automático</option><option value="normal">Normal (imagem = visão do usuário)</option><option value="invertido">Invertido (imagem espelhada)</option></select></label>
+      <label>Modo de orientação <select id="modo"><option value="padrao">Padrão (exige passagem validada)</option><option value="pista">Pista controlada (experimental) — assume disponibilidade, sem comprovar</option></select></label>
+      <label>Avaliação de passagem (só no modo padrão) <select id="passagem"><option value="ligada">Ligada (heurística de piso, experimental)</option><option value="desligada">Desligada</option></select></label>
+      <label>Câmera <select id="camSel"><option value="">Padrão (traseira)</option></select></label>
+      <p><small>Modelo e câmera só podem ser trocados com a assistência encerrada.</small></p>
+    </section>
+    <section class="panel" aria-labelledby="tituloOrientacao">
+      <h2 id="tituloOrientacao">Orientação</h2>
+      <div class="m"><span>Decisão</span><span id="oDec">–</span></div>
+      <div class="m"><span>Lados da imagem</span><span id="oLados">–</span></div>
+      <div class="m"><span>Passagem (piso por cor)</span><span id="oSeg">–</span></div>
+      <div class="m"><span>Fontes de dados</span><span id="oFontes">–</span></div>
+      <div class="m"><span>Regiões</span><span id="oReg">–</span></div>
+      <div class="m"><span>Motivos</span><span id="oMot">–</span></div>
+      <div class="m"><span>Limitações</span><span id="oLim">–</span></div>
+      <small>Regiões: esquerda, frente (centro) e direita, do ponto de vista do usuário. Barras na imagem: vermelho = obstáculo, verde = possível passagem validada, cinza = não confirmada. Segmentação semântica e profundidade: não implementadas.</small>
+    </section>
+  </div>
+
+  <details class="panel" id="diagnostico">
+    <summary><strong>Diagnóstico e métricas</strong></summary>
+    <div class="m"><span>Estado da análise</span><span id="mEst">–</span></div>
+    <div class="m"><span>Modelo de detecção</span><span id="mModelo">não carregado</span></div>
+    <div class="m"><span>Backend do TensorFlow.js</span><span id="mBackend">–</span></div>
+    <div class="m"><span>Carga do modelo</span><span id="mCarga">–</span></div>
+    <div class="m"><span>Voz</span><span id="mVoz">–</span></div>
+    <div class="m"><span>Último resultado válido</span><span id="mUlt">–</span></div>
+    <div class="m"><span>Inferência COCO-SSD</span><span id="mInf">–</span></div>
+    <div class="m"><span>Segmentação (se registrada)</span><span id="mSeg">–</span></div>
+    <div class="m"><span>Ciclo total (inferência + alertas + desenho)</span><span id="mCic">–</span></div>
+    <div class="m"><span>FPS efetivo da análise</span><span id="mFps">–</span></div>
+    <div class="m"><span>FPS da câmera (quadros entregues)</span><span id="mCam">–</span></div>
+    <div class="m"><span>Ciclos concluídos</span><span id="mFr">0</span></div>
+    <div class="m"><span>Ciclos ignorados</span><span id="mIgn">0</span></div>
+    <div class="m"><span>Ciclos com erro</span><span id="mErr">0</span></div>
+    <div class="m"><span>Ciclos acima do intervalo</span><span id="mAtr">0</span></div>
+    <div class="m"><span>Resultados descartados (obsoletos)</span><span id="mDesc">0</span></div>
+    <div class="m"><span>Inferências expiradas (watchdog)</span><span id="mExp">0</span></div>
+    <div class="m"><span>Latência início da inferência → alerta</span><span id="mLat">–</span></div>
+    <div class="m"><span>Alertas emitidos</span><span id="mAl">0</span></div>
+    <div class="m"><span>Ciclos sem novo alerta (cena estável)</span><span id="mSup">0</span></div>
+    <div class="m"><span>Falhas (avisos ao usuário)</span><span id="mFa">0</span></div>
+    <small>Tempos medidos no próprio aparelho. Média e p95 usam os últimos 120 ciclos; FPS efetivo usa janela de 5 s. “–” significa sem medição, não zero.</small>
+    <div class="bar">
+      <button type="button" class="sec" id="btnCsv">Baixar alertas (CSV)</button>
+      <button type="button" class="sec" id="btnPerf">Baixar desempenho (CSV)</button>
+    </div>
+  </details>
+
+  <section class="panel" aria-labelledby="tituloLog"><h2 id="tituloLog">Registro de alertas</h2><ol id="log"></ol></section>
+</main>
+
+<!-- Versões fixadas com verificação de integridade (SRI): o navegador recusa o arquivo se o conteúdo servido pelo CDN mudar. -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" integrity="sha384-vE8hbVJ4lezako5rlvE7bY0BVzWlFhZncPlckrqNwcUQpVtgbENTgZ8TBbnPjZre" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js" integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl" crossorigin="anonymous"></script>
+<script src="js/nucleo.js"></script>
+<script src="js/app.js"></script>
+<script src="js/pwa.js"></script>
+</body>
+</html>
